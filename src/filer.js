@@ -724,7 +724,7 @@ var Filer = new function() {
 
           if (dataObj.append) {
             fileWriter.onwriteend = function(e) {
-              resolve(fileEntry, this);
+              resolve([fileEntry, this]);
             };
 
             fileWriter.seek(fileWriter.length); // Start write position at EOF.
@@ -737,7 +737,7 @@ var Filer = new function() {
                 this.truncate(this.position);
                 return;
               }
-              resolve(fileEntry, this);
+              resolve([fileEntry, this]);
             };
           }
 
@@ -772,7 +772,7 @@ var Filer = new function() {
     }
     return new Promise(function (resolve, reject) {
       var queryCallback = function(byteUsed, byteCap) {
-        resolve(byteUsed, byteCap - byteUsed, byteCap);
+        resolve([byteUsed, byteCap - byteUsed, byteCap]);
       }
 
       if (self.TEMPORARY == this.type) {
