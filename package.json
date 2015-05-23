@@ -1,0 +1,22 @@
+{
+  "name": "filer.js",
+  "version": "0.4.3",
+  "description": "",
+  "main": "src/filer.min.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kyo-ago/filer.js.git"
+  },
+  "author": "ebidel(modified by kyo_ago)",
+  "license": "Apache License, Version 2.0",
+  "bugs": {
+    "url": "https://github.com/kyo-ago/filer.js/issues"
+  },
+  "homepage": "https://github.com/kyo-ago/filer.js"
+}

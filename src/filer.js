@@ -420,45 +420,42 @@ var Filer = new function() {
    *         Default is false.
    *     size {int=} The storage size (in bytes) to open the filesystem with.
    *         Defaults to DEFAULT_FS_SIZE.
-   * @param {Function=} opt_successCallback Optional success handler passed a
-   *      DOMFileSystem object.
-   * @param {Function=} opt_errorHandler Optional error callback.
    */
-  Filer.prototype.init = function(opt_initObj, opt_successCallback,
-                                  opt_errorHandler) {
+  Filer.prototype.init = function(opt_initObj) {
     if (!self.requestFileSystem) {
       throw new MyFileError({
         code: FileError.BROWSER_NOT_SUPPORTED,
         name: 'BROWSER_NOT_SUPPORTED'
       });
     }
+    return new Promise(function (resolve, reject) {
+      var initObj = opt_initObj ? opt_initObj : {}; // Use defaults if obj is null.
 
-    var initObj = opt_initObj ? opt_initObj : {}; // Use defaults if obj is null.
+      var size = initObj.size || DEFAULT_FS_SIZE;
+      this.type = self.TEMPORARY;
+      if ('persistent' in initObj && initObj.persistent) {
+        this.type = self.PERSISTENT;
+      }
 
-    var size = initObj.size || DEFAULT_FS_SIZE;
-    this.type = self.TEMPORARY;
-    if ('persistent' in initObj && initObj.persistent) {
-      this.type = self.PERSISTENT;
-    }
+      var init = function(fs) {
+        this.size = size;
+        fs_ = fs;
+        cwd_ = fs_.root;
+        isOpen_ = true;
 
-    var init = function(fs) {
-      this.size = size;
-      fs_ = fs;
-      cwd_ = fs_.root;
-      isOpen_ = true;
+        resolve(fs);
+      };
 
-      opt_successCallback && opt_successCallback(fs);
-    };
-
-    if (this.type == self.PERSISTENT && !!navigator.persistentStorage) {
-      navigator.persistentStorage.requestQuota(size, function(grantedBytes) {  
+      if (this.type == self.PERSISTENT && !!navigator.persistentStorage) {
+        navigator.persistentStorage.requestQuota(size, function(grantedBytes) {  
+          self.requestFileSystem(
+              this.type, grantedBytes, init.bind(this), reject);
+        }.bind(this), reject);
+      } else {
         self.requestFileSystem(
-            this.type, grantedBytes, init.bind(this), opt_errorHandler);
-      }.bind(this), opt_errorHandler);
-    } else {
-      self.requestFileSystem(
-          this.type, size, init.bind(this), opt_errorHandler);
-    }
+            this.type, size, init.bind(this), reject);
+      }
+    }.bind(this));
   };
 
   /**
@@ -468,51 +465,49 @@ var Filer = new function() {
    *     current working directory. In most cases that is the root entry, unless
    *     cd() has been called. A DirectoryEntry or filesystem URL can also be
    *     passed, in which case, the folder's contents will be returned.
-   * @param {Function} successCallback Success handler passed an Array<Entry>.
-   * @param {Function=} opt_errorHandler Optional error callback.
    */
-  Filer.prototype.ls = function(dirEntryOrPath, successCallback,
-                                opt_errorHandler) {
+  Filer.prototype.ls = function(dirEntryOrPath) {
     if (!fs_) {
       throw new Error(FS_INIT_ERROR_MSG);
     }
+    return new Promise(function (resolve, reject) {
+      var callback = function(dirEntry) {
 
-    var callback = function(dirEntry) {
+        cwd_ = dirEntry;
 
-      cwd_ = dirEntry;
+        // Read contents of current working directory. According to spec, need to
+        // keep calling readEntries() until length of result array is 0. We're
+        // guarenteed the same entry won't be returned again.
+        var entries_ = [];
+        var reader = cwd_.createReader();
 
-      // Read contents of current working directory. According to spec, need to
-      // keep calling readEntries() until length of result array is 0. We're
-      // guarenteed the same entry won't be returned again.
-      var entries_ = [];
-      var reader = cwd_.createReader();
+        var readEntries = function() {
+          reader.readEntries(function(results) {
+            if (!results.length) {
+              // By default, sort the list by name.
+              entries_.sort(function(a, b) {
+                return a.name < b.name ? -1 : b.name < a.name ? 1 : 0;
+              });
+              resolve(entries_);
+            } else {
+              entries_ = entries_.concat(Util.toArray(results));
+              readEntries();
+            }
+          }, reject);
+        };
 
-      var readEntries = function() {
-        reader.readEntries(function(results) {
-          if (!results.length) {
-            // By default, sort the list by name.
-            entries_.sort(function(a, b) {
-              return a.name < b.name ? -1 : b.name < a.name ? 1 : 0;
-            });
-            successCallback(entries_);
-          } else {
-            entries_ = entries_.concat(Util.toArray(results));
-            readEntries();
-          }
-        }, opt_errorHandler);
+        readEntries();
       };
 
-      readEntries();
-    };
-
-    if (dirEntryOrPath.isDirectory) { // passed a DirectoryEntry.
-      callback(dirEntryOrPath);
-    } else if (isFsURL_(dirEntryOrPath)) { // passed a filesystem URL.
-      getEntry_(callback, dirEntryOrPath);
-    } else { // Passed a path. Look up DirectoryEntry and proceeed.
-      // TODO: Find way to use getEntry_(callback, dirEntryOrPath); with cwd_.
-      cwd_.getDirectory(dirEntryOrPath, {}, callback, opt_errorHandler);
-    }
+      if (dirEntryOrPath.isDirectory) { // passed a DirectoryEntry.
+        callback(dirEntryOrPath);
+      } else if (isFsURL_(dirEntryOrPath)) { // passed a filesystem URL.
+        getEntry_(callback, dirEntryOrPath);
+      } else { // Passed a path. Look up DirectoryEntry and proceeed.
+        // TODO: Find way to use getEntry_(callback, dirEntryOrPath); with cwd_.
+        cwd_.getDirectory(dirEntryOrPath, {}, callback, reject);
+      }
+    }.bind(this));
   };
 
   /**
@@ -522,61 +517,48 @@ var Filer = new function() {
    *     given, each intermediate dir is created (e.g. similar to mkdir -p).
    * @param {bool=} opt_exclusive True if an error should be thrown if
    *     one or more of the directories already exists. False by default.
-   * @param {Function} opt_successCallback Success handler passed the
-   *     DirectoryEntry that was created. If we were passed a path, the last
-   *     directory that was created is passed back.
-   * @param {Function=} opt_errorHandler Optional error callback.
    */
-  Filer.prototype.mkdir = function(path, opt_exclusive, opt_successCallback,
-                                   opt_errorHandler) {
+  Filer.prototype.mkdir = function(path, opt_exclusive) {
     if (!fs_) {
       throw new Error(FS_INIT_ERROR_MSG);
     }
+    return new Promise(function (resolve, reject) {
+      var exclusive = opt_exclusive != null ? opt_exclusive : false;
 
-    var exclusive = opt_exclusive != null ? opt_exclusive : false;
+      var folderParts = path.split('/');
 
-    var folderParts = path.split('/');
-
-    var createDir = function(rootDir, folders) {
-      // Throw out './' or '/' and move on. Prevents: '/foo/.//bar'.
-      if (folders[0] == '.' || folders[0] == '') {
-        folders = folders.slice(1);
-      }
-
-      rootDir.getDirectory(folders[0], {create: true, exclusive: exclusive},
-        function (dirEntry) {
-          if (dirEntry.isDirectory) { // TODO: check shouldn't be necessary.
-            // Recursively add the new subfolder if we have more to create and
-            // There was more than one folder to create.
-            if (folders.length && folderParts.length != 1) {
-              createDir(dirEntry, folders.slice(1));
-            } else {
-              // Return the last directory that was created.
-              if (opt_successCallback) opt_successCallback(dirEntry);
-            }
-          } else {
-            var e = new Error(path + ' is not a directory');
-            if (opt_errorHandler) {
-              opt_errorHandler(e);
-            } else {
-              throw e;
-            }
-          }
-        },
-        function(e) {
-          if (e.code == FileError.INVALID_MODIFICATION_ERR) {
-            e.message = "'" + path + "' already exists";
-            if (opt_errorHandler) {
-              opt_errorHandler(e);
-            } else {
-              throw e;
-            }
-          }
+      var createDir = function(rootDir, folders) {
+        // Throw out './' or '/' and move on. Prevents: '/foo/.//bar'.
+        if (folders[0] == '.' || folders[0] == '') {
+          folders = folders.slice(1);
         }
-      );
-    };
 
-    createDir(cwd_, folderParts);
+        rootDir.getDirectory(folders[0], {create: true, exclusive: exclusive},
+          function (dirEntry) {
+            if (dirEntry.isDirectory) { // TODO: check shouldn't be necessary.
+              // Recursively add the new subfolder if we have more to create and
+              // There was more than one folder to create.
+              if (folders.length && folderParts.length != 1) {
+                createDir(dirEntry, folders.slice(1));
+              } else {
+                // Return the last directory that was created.
+                resolve(dirEntry);
+              }
+            } else {
+              reject(new Error(path + ' is not a directory'));
+            }
+          },
+          function(e) {
+            if (e.code == FileError.INVALID_MODIFICATION_ERR) {
+              e.message = "'" + path + "' already exists";
+              reject(e);
+            }
+          }
+        );
+      };
+
+      createDir(cwd_, folderParts);
+    }.bind(this));
   };
 
   /**
@@ -584,21 +566,20 @@ var Filer = new function() {
    *
    * @param {string|FileEntry} entryOrPath A path, filesystem URL, or FileEntry
    *     of the file to lookup.
-   * @param {Function} successCallback Success callback passed the File object.
-   * @param {Function=} opt_errorHandler Optional error callback.
    */
-  Filer.prototype.open = function(entryOrPath, successCallback, opt_errorHandler) {
+  Filer.prototype.open = function(entryOrPath) {
     if (!fs_) {
       throw new Error(FS_INIT_ERROR_MSG);
     }
-
-    if (entryOrPath.isFile) {
-      entryOrPath.file(successCallback, opt_errorHandler);
-    } else {
-      getEntry_(function(fileEntry) {
-        fileEntry.file(successCallback, opt_errorHandler);
-      }, pathToFsURL_(entryOrPath));
-    }
+    return new Promise(function (resolve, reject) {
+      if (entryOrPath.isFile) {
+        entryOrPath.file(resolve, reject);
+      } else {
+        getEntry_(function(fileEntry) {
+          fileEntry.file(resolve, reject);
+        }, pathToFsURL_(entryOrPath));
+      }
+    }.bind(this));
   };
 
   /**
@@ -608,30 +589,23 @@ var Filer = new function() {
    *     current working directory.
    * @param {bool=} opt_exclusive True (default) if an error should be thrown if
    *     the file already exists.
-   * @param {Function} successCallback A success callback, which is passed
-   *     the new FileEntry.
-   * @param {Function=} opt_errorHandler Optional error callback.
    */
-  Filer.prototype.create = function(path, opt_exclusive, successCallback,
-                                    opt_errorHandler) {
+  Filer.prototype.create = function(path, opt_exclusive) {
     if (!fs_) {
       throw new Error(FS_INIT_ERROR_MSG);
     }
+    return new Promise(function (resolve, reject) {
+      var exclusive = opt_exclusive != null ? opt_exclusive : true;
 
-    var exclusive = opt_exclusive != null ? opt_exclusive : true;
-
-    cwd_.getFile(path, {create: true,  exclusive: exclusive}, successCallback,
-      function(e) {
-        if (e.code == FileError.INVALID_MODIFICATION_ERR) {
-          e.message = "'" + path + "' already exists";
+      cwd_.getFile(path, {create: true,  exclusive: exclusive}, resolve,
+        function(e) {
+          if (e.code == FileError.INVALID_MODIFICATION_ERR) {
+            e.message = "'" + path + "' already exists";
+          }
+          reject(e);
         }
-        if (opt_errorHandler) {
-          opt_errorHandler(e);
-        } else {
-          throw e;
-        }
-      }
-    );
+      );
+    }.bind(this));
   };
 
   /**
@@ -643,14 +617,12 @@ var Filer = new function() {
     *     If dest is a string, a path or filesystem: URL is accepted.
     *     Note: dest needs to be the same type as src.
     * @param {string=} opt_newName An optional new name for the moved entry.
-    * @param {Function=} opt_successCallback Optional callback passed the moved
-    *     entry on a successful move.
-    * @param {Function=} opt_errorHandler Optional error callback.
     */
-  Filer.prototype.mv = function(src, dest, opt_newName, opt_successCallback,
-                                opt_errorHandler) {
-    copyOrMove_.bind(this, src, dest, opt_newName, opt_successCallback,
-                     opt_errorHandler, true)();
+  Filer.prototype.mv = function(src, dest, opt_newName) {
+    return new Promise(function (resolve, reject) {
+      copyOrMove_.bind(this, src, dest, opt_newName, resolve,
+                       reject, true)();
+    }.bind(this));
   };
 
   /**
@@ -660,29 +632,26 @@ var Filer = new function() {
    *     to remove. If entry is a DirectoryEntry, its contents are removed
    *     recursively. If entryOrPath is a string, a path or filesystem: URL is
    *     accepted.
-   * @param {Function} successCallback Zero arg callback invoked on
-   *     successful removal.
-   * @param {Function=} opt_errorHandler Optional error callback.
    */
-  Filer.prototype.rm = function(entryOrPath, successCallback,
-                                opt_errorHandler) {
+  Filer.prototype.rm = function(entryOrPath) {
     if (!fs_) {
       throw new Error(FS_INIT_ERROR_MSG);
     }
+    return new Promise(function (resolve, reject) {
+      var removeIt = function(entry) {
+        if (entry.isFile) {
+          entry.remove(resolve, reject);
+        } else if (entry.isDirectory) {
+          entry.removeRecursively(resolve, reject);
+        }
+      };
 
-    var removeIt = function(entry) {
-      if (entry.isFile) {
-        entry.remove(successCallback, opt_errorHandler);
-      } else if (entry.isDirectory) {
-        entry.removeRecursively(successCallback, opt_errorHandler);
+      if (entryOrPath.isFile || entryOrPath.isDirectory) {
+        removeIt(entryOrPath);
+      } else {
+        getEntry_(removeIt, entryOrPath);
       }
-    };
-
-    if (entryOrPath.isFile || entryOrPath.isDirectory) {
-      removeIt(entryOrPath);
-    } else {
-      getEntry_(removeIt, entryOrPath);
-    }
+    }.bind(this));
   };
 
   /**
@@ -691,37 +660,29 @@ var Filer = new function() {
    * @param {string|DirectoryEntry} dirEntryOrPath A DirectoryEntry to move into
    *     or a path relative to the current working directory. A filesystem: URL
    *     is also accepted
-   * @param {Function=} opt_successCallback Optional success callback, which is
-   *     passed the DirectoryEntry of the new current directory.
-   * @param {Function=} opt_errorHandler Optional error callback.
    */
-  Filer.prototype.cd = function(dirEntryOrPath, opt_successCallback,
-                                opt_errorHandler) {
+  Filer.prototype.cd = function(dirEntryOrPath) {
     if (!fs_) {
       throw new Error(FS_INIT_ERROR_MSG);
     }
+    return new Promise(function (resolve, reject) {
+      if (dirEntryOrPath.isDirectory) {
+        cwd_ = dirEntryOrPath;
+        resolve(cwd_);
+      } else {
+        // Build a filesystem: URL manually if we need to.
+        dirEntryOrPath = pathToFsURL_(dirEntryOrPath);
 
-    if (dirEntryOrPath.isDirectory) {
-      cwd_ = dirEntryOrPath;
-      opt_successCallback && opt_successCallback(cwd_);
-    } else {
-      // Build a filesystem: URL manually if we need to.
-      var dirEntryOrPath = pathToFsURL_(dirEntryOrPath);
-
-      getEntry_(function(dirEntry) {
-        if (dirEntry.isDirectory) {
-          cwd_ = dirEntry;
-          opt_successCallback && opt_successCallback(cwd_);
-        } else {
-          var e = new Error(NOT_A_DIRECTORY);
-          if (opt_errorHandler) {
-            opt_errorHandler(e);
+        getEntry_(function(dirEntry) {
+          if (dirEntry.isDirectory) {
+            cwd_ = dirEntry;
+            resolve(cwd_);
           } else {
-            throw e;
+            reject(new Error(NOT_A_DIRECTORY));
           }
-        }
-      }, dirEntryOrPath);
-    }
+        }, dirEntryOrPath);
+      }
+    }.bind(this));
   };
 
   /**
@@ -733,14 +694,11 @@ var Filer = new function() {
     *     If dest is a string, a path or filesystem: URL is accepted.
     *     Note: dest needs to be the same type as src.
     * @param {string=} opt_newName An optional name for the copied entry.
-    * @param {Function=} opt_successCallback Optional callback passed the moved
-    *     entry on a successful copy.
-    * @param {Function=} opt_errorHandler Optional error callback.
     */
-  Filer.prototype.cp = function(src, dest, opt_newName, opt_successCallback,
-                                opt_errorHandler) {
-    copyOrMove_.bind(this, src, dest, opt_newName, opt_successCallback,
-                     opt_errorHandler)();
+  Filer.prototype.cp = function(src, dest, opt_newName) {
+    return new Promise(function (resolve, reject) {
+      copyOrMove_.bind(this, src, dest, opt_newName, resolve, reject)();
+    }.bind(this));
   };
 
   /**
@@ -753,84 +711,78 @@ var Filer = new function() {
    * @param {object} dataObj The data to write. Example:
    *     {data: string|Blob|File|ArrayBuffer, type: mimetype, append: true}
    *     If append is specified, data is appended to the end of the file.
-   * @param {Function} opt_successCallback Success callback, which is passed
-   *     the created FileEntry and FileWriter object used to write the data.
-   * @param {Function=} opt_errorHandler Optional error callback.
    */
-  Filer.prototype.write = function(entryOrPath, dataObj, opt_successCallback,
-                                   opt_errorHandler) {
+  Filer.prototype.write = function(entryOrPath, dataObj) {
     if (!fs_) {
       throw new Error(FS_INIT_ERROR_MSG);
     }
+    return new Promise(function (resolve, reject) {
+      var writeFile_ = function(fileEntry) {
+        fileEntry.createWriter(function(fileWriter) {
 
-    var writeFile_ = function(fileEntry) {
-      fileEntry.createWriter(function(fileWriter) {
+          fileWriter.onerror = reject;
 
-        fileWriter.onerror = opt_errorHandler;
+          if (dataObj.append) {
+            fileWriter.onwriteend = function(e) {
+              resolve(fileEntry, this);
+            };
 
-        if (dataObj.append) {
-          fileWriter.onwriteend = function(e) {
-            if (opt_successCallback) opt_successCallback(fileEntry, this);
-          };
+            fileWriter.seek(fileWriter.length); // Start write position at EOF.
+          } else {
+            var truncated = false;
+            fileWriter.onwriteend = function(e) {
+              // Truncate file to newly written file size.
+              if (!truncated) {
+                truncated = true;
+                this.truncate(this.position);
+                return;
+              }
+              resolve(fileEntry, this);
+            };
+          }
 
-          fileWriter.seek(fileWriter.length); // Start write position at EOF.
-        } else {
-          var truncated = false;
-          fileWriter.onwriteend = function(e) {
-            // Truncate file to newly written file size.
-            if (!truncated) {
-              truncated = true;
-              this.truncate(this.position);
-              return;
-            }
-            if (opt_successCallback) opt_successCallback(fileEntry, this);
-          };
-        }
+          // Blob() takes ArrayBufferView, not ArrayBuffer.
+          if (dataObj.data.__proto__ == ArrayBuffer.prototype) {
+            dataObj.data = new Uint8Array(dataObj.data);
+          }
+          var blob = new Blob([dataObj.data],
+                              dataObj.type ? {type: dataObj.type} : {});
 
-        // Blob() takes ArrayBufferView, not ArrayBuffer.
-        if (dataObj.data.__proto__ == ArrayBuffer.prototype) {
-          dataObj.data = new Uint8Array(dataObj.data);
-        }
-        var blob = new Blob([dataObj.data],
-                            dataObj.type ? {type: dataObj.type} : {});
+          fileWriter.write(blob);
 
-        fileWriter.write(blob);
+        }, reject);
+      };
 
-      }, opt_errorHandler);
-    };
-
-    if (entryOrPath.isFile) {
-      writeFile_(entryOrPath);
-    } else if (isFsURL_(entryOrPath)) {
-      getEntry_(writeFile_, entryOrPath);
-    } else {
-      cwd_.getFile(entryOrPath, {create: true, exclusive: false}, writeFile_,
-                   opt_errorHandler);
-    }
+      if (entryOrPath.isFile) {
+        writeFile_(entryOrPath);
+      } else if (isFsURL_(entryOrPath)) {
+        getEntry_(writeFile_, entryOrPath);
+      } else {
+        cwd_.getFile(entryOrPath, {create: true, exclusive: false}, writeFile_, reject);
+      }
+    }.bind(this));
   };
   
   /**
    * Displays disk space usage.
-   *
-   * @param {Function} successCallback Success callback, which is passed
-   *     Used space, Free space and Currently allocated total space in bytes.
-   * @param {Function=} opt_errorHandler Optional error callback.
    */
-  Filer.prototype.df = function(successCallback, opt_errorHandler) {
-    var queryCallback = function(byteUsed, byteCap) {
-      successCallback(byteUsed, byteCap - byteUsed, byteCap);
-    }
-    
+  Filer.prototype.df = function() {
     if (!(navigator.temporaryStorage.queryUsageAndQuota && navigator.persistentStorage.queryUsageAndQuota)) {
       throw new Error(NOT_IMPLEMENTED_MSG);
     }
+    return new Promise(function (resolve, reject) {
+      var queryCallback = function(byteUsed, byteCap) {
+        resolve(byteUsed, byteCap - byteUsed, byteCap);
+      }
 
-    if (self.TEMPORARY == this.type) {
-      navigator.temporaryStorage.queryUsageAndQuota(queryCallback, opt_errorHandler);
-    } else if (self.PERSISTENT == this.type) {
-      navigator.persistentStorage.queryUsageAndQuota(queryCallback, opt_errorHandler);
-    }
+      if (self.TEMPORARY == this.type) {
+        navigator.temporaryStorage.queryUsageAndQuota(queryCallback, reject);
+      } else if (self.PERSISTENT == this.type) {
+        navigator.persistentStorage.queryUsageAndQuota(queryCallback, reject);
+      }
+    }.bind(this));
   };
                                    
   return Filer;
 };
+module.exports = Filer;
