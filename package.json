@@ -2,7 +2,7 @@
   "name": "filer.js",
   "version": "0.4.4",
   "description": "",
-  "main": "src/filer.min.js",
+  "main": "src/filer.js",
   "directories": {
     "test": "tests"
   },

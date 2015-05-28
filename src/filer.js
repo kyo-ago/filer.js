@@ -23,7 +23,12 @@
 
 'use strict';
 
-var self = this; // window or worker context.
+var self = (
+    "undefined" !== typeof window ? window
+        : "undefined" !== typeof global ? global
+        : "undefined" !== typeof self ? self
+        : {}
+); // window or worker context.
 
 self.URL = self.URL || self.webkitURL;
 self.requestFileSystem = self.requestFileSystem || self.webkitRequestFileSystem;
@@ -38,8 +43,8 @@ self.BlobBuilder = self.BlobBuilder || self.MozBlobBuilder ||
 
 // Prevent errors in browsers that don't support FileError.
 if (self.FileError === undefined) {
-  var FileError = function() {};
-  FileError.prototype.prototype = Error.prototype;
+  self.FileError = function() {};
+  self.FileError.prototype.prototype = Error.prototype;
 }
 
 var Util = {
@@ -226,7 +231,7 @@ var Util = {
 
 
 var MyFileError = function(obj) {
-  this.prototype = FileError.prototype;
+  this.prototype = self.FileError.prototype;
   this.code = obj.code;
   this.name = obj.name;
 };
@@ -234,13 +239,13 @@ var MyFileError = function(obj) {
 
 // Extend FileError with custom errors and a convenience method to get error
 // code mnemonic.
-FileError.BROWSER_NOT_SUPPORTED = 1000;
+self.FileError.BROWSER_NOT_SUPPORTED = 1000;
 
 // TODO: remove when FileError.name is implemented (crbug.com/86014).
-FileError.prototype.__defineGetter__('name', function() {
-  var keys = Object.keys(FileError);
+self.FileError.prototype.__defineGetter__('name', function() {
+  var keys = Object.keys(self.FileError);
   for (var i = 0, key; key = keys[i]; ++i) {
-    if (FileError[key] == this.code) {
+    if (self.FileError[key] == this.code) {
       return key;
     }
   }
@@ -300,7 +305,7 @@ var Filer = new function() {
     var destStr = arguments[2];
 
     var onError = function(e) {
-      if (e.code == FileError.NOT_FOUND_ERR) {
+      if (e.code == self.FileError.NOT_FOUND_ERR) {
         if (destStr) {
           throw new Error('"' + srcStr + '" or "' + destStr +
                           '" does not exist.');
@@ -424,7 +429,7 @@ var Filer = new function() {
   Filer.prototype.init = function(opt_initObj) {
     if (!self.requestFileSystem) {
       throw new MyFileError({
-        code: FileError.BROWSER_NOT_SUPPORTED,
+        code: self.FileError.BROWSER_NOT_SUPPORTED,
         name: 'BROWSER_NOT_SUPPORTED'
       });
     }
@@ -549,7 +554,7 @@ var Filer = new function() {
             }
           },
           function(e) {
-            if (e.code == FileError.INVALID_MODIFICATION_ERR) {
+            if (e.code == self.FileError.INVALID_MODIFICATION_ERR) {
               e.message = "'" + path + "' already exists";
               reject(e);
             }
@@ -599,7 +604,7 @@ var Filer = new function() {
 
       cwd_.getFile(path, {create: true,  exclusive: exclusive}, resolve,
         function(e) {
-          if (e.code == FileError.INVALID_MODIFICATION_ERR) {
+          if (e.code == self.FileError.INVALID_MODIFICATION_ERR) {
             e.message = "'" + path + "' already exists";
           }
           reject(e);
